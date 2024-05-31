@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 ##############################################################################################################################################################
-# This script is meant to be run COMEBin after obtaining the bam files.
+# This script is meant to run COMEBin training after obtaining the bam files.
 # Author of pipeline: Ziye Wang.
 # For questions, bugs, and suggestions, contact me at zwang17@fudan.edu.cn
 ##############################################################################################################################################################
@@ -10,35 +10,29 @@ VERSION="1.0.4"
 help_message () {
   echo ""
   echo "COMEBin version: $VERSION"
-  echo "Usage: bash run_comebin.sh [options] -a contig_file -o output_dir -p bam_file_path"
-	echo "Options:"
-	echo ""
-	echo "  -a STR          metagenomic assembly file"
-	echo "  -o STR          output directory"
-	echo "  -p STR          path to access to the bam files"
-	echo "  -n INT          number of views for contrastive multiple-view learning (default=6)"
-	echo "  -t INT          number of threads (default=5)"
-	echo "  -l FLOAT        temperature in loss function (default=0.07 for assemblies with an N50 > 10000, default=0.15 for others)"
-	echo "  -e INT          embedding size for comebin network (default=2048)"
-	echo "  -c INT          embedding size for coverage network (default=2048)"
-	echo "  -b INT          batch size for training process (default=1024)"
-	echo "";}
+  echo "Usage: bash run_comebin_train.sh [options] -a contig_file -o output_dir -p bam_file_path"
+  echo "Options:"
+  echo ""
+  echo "  -a STR          metagenomic assembly file"
+  echo "  -o STR          output directory"
+  echo "  -p STR          path to access to the bam files"
+  echo "  -n INT          number of views for contrastive multiple-view learning (default=6)"
+  echo "  -t INT          number of threads (default=5)"
+  echo "  -l FLOAT        temperature in loss function (default=0.07 for assemblies with an N50 > 10000, default=0.15 for others)"
+  echo "  -e INT          embedding size for comebin network (default=2048)"
+  echo "  -c INT          embedding size for coverage network (default=2048)"
+  echo "  -b INT          batch size for training process (default=1024)"
+  echo "";}
 
-run_file_path=$(dirname $(which run_comebin.sh))
+run_file_path=$(dirname $(which run_comebin_train.sh))
 
 if [[ $? -ne 0 ]]; then
-	echo "cannot find run_comebin.sh file - something went wrong with the installation!"
-	exit 1
+  echo "cannot find run_comebin_train.sh file - something went wrong with the installation!"
+  exit 1
 fi
-
-
-########################################################################################################
-########################     LOADING IN THE PARAMETERS AND RUNNING              ########################
-########################################################################################################
 
 num_threads=5
 n_views=6
-#temperature=0.15
 emb_szs_forcov=2048
 emb_szs=2048
 batch_size=1024
@@ -64,15 +58,12 @@ while getopts a:o:p:n:t:l:e:c:b: OPT; do
   b) batch_size=${OPTARG}
     ;;
   \?)
-#    printf "[Usage] `date '+%F %T'` -i <INPUT_FILE> -o <OUTPUT_DIR> -o <P
-#RODUCT_CODE> -s <SOFTWARE_VERSION> -t <TYPE>\n" >&2
     exit 1
  esac
 done
 
 cd ${run_file_path}/COMEBin
 
-# check parameter
 if [ -z "${contig_file}" -o -z "${output_dir}" -o -z "${bam_file_path}" ]; then
   help_message
   exit 1
@@ -80,25 +71,17 @@ fi
 
 sequence_count=$(grep -c "^>" "${contig_file}")
 
-
 if (( sequence_count < ${batch_size} )); then
     batch_size=${sequence_count}
 fi
 
 echo "Batch size: ${batch_size}"
 
-
 if [ -z "$temperature" ]; then
-    # Compute the length of each sequence and sort using the awk command
     awk '/^>/ {if (seqlen) print seqlen; seqlen=0; next} {seqlen+=length($0)} END {print seqlen}' "$contig_file" | sort -rn > ${contig_file}_lengths.txt
-
-    # CAL N50
     total_length=$(awk '{sum+=$1} END {print sum}' ${contig_file}_lengths.txt)
     target_length=$(awk -v total="$total_length" 'BEGIN {cutoff=total/2; current=0} {current+=$1; if (current >= cutoff) {print $1; exit}}' ${contig_file}_lengths.txt)
-
-    # N50
     echo "N50: $target_length"
-    # Check if N50 is greater than 10000 and set tau accordingly
     if [ "$target_length" -gt 10000 ]; then
         temperature=0.07
     else
@@ -109,12 +92,6 @@ else
     echo "Tau(temperature): ${temperature}"
 fi
 
-
-
-
-########################################################################################################
-###### Get augmentation data
-########################################################################################################
 folder=${output_dir}/data_augmentation
 keyword="_datacoverage_mean"
 
@@ -140,9 +117,6 @@ fi
 
 if [[ $? -ne 0 ]] ; then echo "Something went wrong with running generating augmentation data. Exiting.";exit 1; fi
 
-########################################################################################################
-###### Get representation (training process)
-########################################################################################################
 folder=${output_dir}/comebin_res
 keyword="embeddings.tsv"
 
@@ -170,23 +144,4 @@ else
     --output_path ${output_dir}/comebin_res --earlystop --addvars --vars_sqrt --num_threads ${num_threads}
 fi
 
-
 if [[ $? -ne 0 ]] ; then echo "Something went wrong with running training network. Exiting.";exit 1; fi
-
-########################################################################################################
-#### Clustering (run Leiden-based clustering methods and get the final result)
-########################################################################################################
-emb_file=${output_dir}/comebin_res/embeddings.tsv
-seed_file=${contig_file}.bacar_marker.2quarter_lencutoff_1001.seed
-
-python main.py bin --contig_file ${contig_file} \
---emb_file ${emb_file} \
---output_path ${output_dir}/comebin_res \
---seed_file ${seed_file} --num_threads ${num_threads}
-
-python main.py get_result --contig_file ${contig_file} \
---output_path ${output_dir}/comebin_res \
---seed_file ${seed_file} --num_threads ${num_threads}
-
-if [[ $? -ne 0 ]] ; then echo "Something went wrong with running clustering. Exiting.";exit 1; fi
-
