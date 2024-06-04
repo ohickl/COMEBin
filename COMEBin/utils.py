@@ -242,6 +242,9 @@ def gen_seed(logger, contig_file: str, threads: int, contig_length_threshold: in
                 candK = file_len(seedURL)
             else:
                 logger.info("markerCmd failed! Not exist: " + markerCmd)
+                # Touch empy seed file
+                logger.info("Touching empty seed file: " + seedURL)
+                open(seedURL, 'a').close()
                 candK = 0
         else:
             logger.info("Hmmsearch failed! Not exist: " + hmmResultURL)
