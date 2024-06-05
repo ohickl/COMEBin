@@ -55,7 +55,13 @@ python main.py bin --contig_file ${contig_file} \
 --output_path ${output_dir}/comebin_res \
 --seed_file ${seed_file} --num_threads ${num_threads}
 
-if [[ $? -ne 0 ]] ; then echo "Something went wrong with running clustering. Exiting."; exit 1; fi
+if [[ $? -eq 42 ]] ; then
+  echo "Cant continue with binning. Exiting."
+  exit 0
+elif [[ $? -ne 0 ]] ; then
+  echo "Something went wrong with running binning. Exiting."
+  exit 1
+fi
 
 python main.py get_result --contig_file ${contig_file} \
 --output_path ${output_dir}/comebin_res \
