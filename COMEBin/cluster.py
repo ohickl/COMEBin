@@ -364,8 +364,7 @@ def cluster(logger, args, prefix=None):
         seed_namelist = pd.read_csv(seed_file, header=None, sep='\t', usecols=range(1)).values[:, 0]
         seed_num = len(np.unique(seed_namelist))
     except pd.errors.EmptyDataError:
-        seed_namelist = []
-        seed_num = 0
+        return False
 
     mode = 'weight_seed_kmeans'
     if prefix:
@@ -419,6 +418,5 @@ def cluster(logger, args, prefix=None):
             multiprocess.close()
             multiprocess.join()
         logger.info('multiprocess Done')
-
-
-
+      
+        return True
