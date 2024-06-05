@@ -300,7 +300,7 @@ def main():
         clustering_status = cluster(logger, args)
         
         if not clustering_status:
-            sys.exit(1)
+            sys.exit(0)
 
 
     ## clustering NoContrast
