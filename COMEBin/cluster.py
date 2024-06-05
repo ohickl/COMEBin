@@ -7,6 +7,7 @@ import time
 import os
 import scipy.sparse as sp
 import logging
+import sys
 
 from igraph import Graph
 from sklearn.preprocessing import normalize
@@ -15,7 +16,6 @@ from sklearn.cluster._kmeans import euclidean_distances, stable_cumsum, KMeans, 
 from utils import get_length, calculateN50, save_result
 from scripts.gen_bins_from_tsv import gen_bins as gen_bins_from_tsv
 from typing import List, Optional, Union
-
 
 logger = logging.getLogger('COMEBin')
 
@@ -364,8 +364,11 @@ def cluster(logger, args, prefix=None):
         seed_namelist = pd.read_csv(seed_file, header=None, sep='\t', usecols=range(1)).values[:, 0]
         seed_num = len(np.unique(seed_namelist))
     except pd.errors.EmptyDataError:
-        seed_namelist = []
-        seed_num = 0
+        logger.warning("Seed file is empty. Exiting now.")
+
+        sys.exit(0)
+        # seed_namelist = []
+        # seed_num = 0
 
     mode = 'weight_seed_kmeans'
     if prefix:
