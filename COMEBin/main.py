@@ -2,6 +2,7 @@ import argparse
 import logging
 import os
 import pandas as pd
+import sys
 
 from comebin_version import __version__ as ver
 from train_CLmodel import train_CLmodel
@@ -296,7 +297,10 @@ def main():
         num_threads = args.num_threads
         _ = gen_seed(logger, args.contig_file, num_threads, args.contig_len, marker_name="bacar_marker", quarter="2quarter")
 
-        cluster(logger, args)
+        clustering_status = cluster(logger, args)
+        
+        if not clustering_status:
+            sys.exit(1)
 
 
     ## clustering NoContrast
