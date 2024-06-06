@@ -55,11 +55,13 @@ python main.py bin --contig_file ${contig_file} \
 --output_path ${output_dir}/comebin_res \
 --seed_file ${seed_file} --num_threads ${num_threads}
 
-if [[ $? -eq 42 ]] ; then
+error_code=$?
+
+if [[ $error_code -eq 42 ]] ; then
   echo "Cant continue with binning. Exiting."
   exit 0
-elif [[ $? -ne 0 ]] ; then
-  echo "Something went wrong with running binning. Exiting."
+elif [[ $error_code -ne 0 ]] ; then
+  echo "Error code: $error_code. Something went wrong with running binning. Exiting."
   exit 1
 fi
 
