@@ -1,13 +1,21 @@
-import hnswlib
-import leidenalg
+import os
+import sys
+import time
+import logging
+
 import numpy as np
 import pandas as pd
+
+from typing import List, Optional, Union
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from pathlib import Path
+from tqdm import tqdm
+
+import hnswlib
+import leidenalg
 import functools
-import time
-import os
+
 import scipy.sparse as sp
-import logging
-import sys
 
 from igraph import Graph
 from sklearn.preprocessing import normalize
@@ -15,7 +23,6 @@ from sklearn.cluster._kmeans import euclidean_distances, stable_cumsum, KMeans, 
 
 from utils import get_length, calculateN50, save_result
 from scripts.gen_bins_from_tsv import gen_bins as gen_bins_from_tsv
-from typing import List, Optional, Union
 
 logger = logging.getLogger('COMEBin')
 
@@ -233,8 +240,8 @@ def run_leiden(output_file: str, namelist: List[str],
                ann_neighbor_indices: np.ndarray, ann_distances: np.ndarray,
                length_weight: List[float], max_edges: int, norm_embeddings: np.ndarray,
                bandwidth: float = 0.1, lmode: str = 'l2', initial_list: Optional[List[Union[int, None]]] = None,
-               is_membership_fixed: Optional[bool] = None, resolution_parameter: float = 1.0,
-               partgraph_ratio: int = 50):
+               is_membership_fixed: Optional[List[bool]] = None, resolution_parameter: float = 1.0,
+               partgraph_ratio: int = 50) -> None:
     """
     Run Leiden community detection algorithm and save the results.
 
@@ -254,63 +261,79 @@ def run_leiden(output_file: str, namelist: List[str],
 
     :return: None
     """
+    try:
+        # Input validation
+        if lmode not in ['l1', 'l2']:
+            raise ValueError("lmode must be either 'l1' or 'l2'")
+        
+        if not (0 <= partgraph_ratio <= 100):
+            raise ValueError("partgraph_ratio must be between 0 and 100")
 
-    sources = np.repeat(np.arange(len(norm_embeddings)), max_edges)
-    targets_indices = ann_neighbor_indices[:,1:]
-    targets = targets_indices.flatten()
-    wei = ann_distances[:,1:]
-    wei = wei.flatten()
+        # Prepare edge data
+        sources = np.arange(len(norm_embeddings))[:, np.newaxis].repeat(max_edges, axis=1)
+        targets = ann_neighbor_indices[:, 1:]
+        weights = ann_distances[:, 1:]
 
-    dist_cutoff = np.percentile(wei, partgraph_ratio)
-    save_index = wei <= dist_cutoff
+        # Flatten and filter edges
+        sources = sources.flatten()
+        targets = targets.flatten()
+        weights = weights.flatten()
 
-    sources = sources[save_index]
-    targets = targets[save_index]
-    wei = wei[save_index]
+        dist_cutoff = np.percentile(weights, partgraph_ratio)
+        mask = weights <= dist_cutoff
+        sources = sources[mask]
+        targets = targets[mask]
+        weights = weights[mask]
 
-    if lmode == 'l1':
-        wei = np.sqrt(wei)
-        wei = np.exp(-wei / bandwidth)
+        # Apply distance transformation
+        if lmode == 'l1':
+            weights = np.exp(-np.sqrt(weights) / bandwidth)
+        else:  # l2
+            weights = np.exp(-weights / bandwidth)
 
-    if lmode == 'l2':
-        wei = np.exp(-wei / bandwidth)
+        # Create undirected graph (remove duplicate edges)
+        mask = sources < targets
+        sources, targets, weights = sources[mask], targets[mask], weights[mask]
 
-    index = sources > targets
-    sources = sources[index]
-    targets = targets[index]
-    wei = wei[index]
-    vcount = len(norm_embeddings)
-    edgelist = list(zip(sources, targets))
-    g = Graph(vcount, edgelist)
+        # Create graph
+        g = Graph(n=len(norm_embeddings), edges=list(zip(sources, targets)), directed=False)
+        g.es['weight'] = weights
 
-    res = leidenalg.RBERVertexPartition(g,
-                                        weights=wei, initial_membership = initial_list,
-                                        resolution_parameter = resolution_parameter,node_sizes=length_weight)
+        # Run Leiden algorithm
+        partition = leidenalg.find_partition(
+            g,
+            leidenalg.RBConfigurationVertexPartition,
+            weights='weight',
+            initial_membership=initial_list,
+            resolution_parameter=resolution_parameter,
+            node_sizes=length_weight,
+            seed=42  # for reproducibility
+        )
 
-    optimiser = leidenalg.Optimiser()
-    optimiser.optimise_partition(res, is_membership_fixed=is_membership_fixed,n_iterations=-1)
+        # Optimize partition
+        optimiser = leidenalg.Optimiser()
+        optimiser.optimise_partition(partition, is_membership_fixed=is_membership_fixed, n_iterations=-1)
 
-    part = list(res)
+        # Prepare results
+        contig_labels_dict = {name: f'group{community}' for name, community in zip(namelist, partition.membership)}
 
+        # Write results to file
+        output_path = Path(output_file)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        with output_path.open('w') as f:
+            for contig in namelist:
+                f.write(f"{contig}\t{contig_labels_dict[contig]}\n")
 
-    contig_labels_dict ={}
-    # dict of communities
-    numnode = 0
-    rang = []
-    for ci in range(len(part)):
-        rang.append(ci)
-        numnode = numnode+len(part[ci])
-        for id in part[ci]:
-            contig_labels_dict[namelist[id]] = 'group'+str(ci)
+        logger.info(f"Results written to {output_file}")
 
-    logger.info(output_file)
-    f = open(output_file, 'w')
-    for contigIdx in range(len(contig_labels_dict)):
-        f.write(namelist[contigIdx] + "\t" + str(contig_labels_dict[namelist[contigIdx]]) + "\n")
-    f.close()
+    except Exception as e:
+        logger.error(f"Error in run_leiden: {str(e)}")
+        raise
 
+    return None
 
-def cluster(logger, args, prefix=None):
+def cluster(args, prefix: Optional[str] = None) -> None:
     """
     Cluster contigs and save the results.
 
@@ -320,108 +343,108 @@ def cluster(logger, args, prefix=None):
     """
     logger.info("Start clustering.")
 
-    emb_file = args.emb_file
-    seed_file = args.seed_file
-    output_path = args.output_path
-    contig_file = args.contig_file
-
+    # Load and preprocess data
+    emb_file = Path(args.emb_file)
+    seed_file = Path(args.seed_file)
+    output_path = Path(args.output_path) / 'cluster_res'
+    contig_file = Path(args.contig_file)
     contig_len = args.contig_len
 
-    output_path = output_path + '/cluster_res/'
+    output_path.mkdir(parents=True, exist_ok=True)
 
-    embHeader = pd.read_csv(emb_file, sep='\t', nrows=1)
-    embMat = pd.read_csv(emb_file, sep='\t', usecols=range(1, embHeader.shape[1])).values
-    namelist = pd.read_csv(emb_file, sep='\t', usecols=range(1)).values[:, 0]
-
+    # Load embeddings and contig names
+    embMat, namelist = load_embeddings(emb_file)
+    
+    # Get contig lengths and filter short contigs
     lengths = get_length(contig_file)
-    length_weight = []
-    for seq_id in namelist:
-        length_weight.append(lengths[seq_id])
+    length_weight = [lengths[seq_id] for seq_id in namelist]
+    
+    mask = np.array(length_weight) >= contig_len
+    embMat = embMat[mask]
+    namelist = namelist[mask]
+    length_weight = list(np.array(length_weight)[mask])
 
     N50 = calculateN50(length_weight)
-    logger.info('N50:\t' + str(N50))
+    logger.info(f'N50:\t{N50}')
 
-    length_weight = []
+    # Normalize embeddings if required
+    norm_embeddings = embMat if args.not_l2normaize else normalize(embMat)
 
-    for seq_id in namelist:
-        length_weight.append(lengths[seq_id])
+    # Run weighted seed k-means
+    run_weighted_seed_kmeans(args, contig_file, namelist, output_path, norm_embeddings, length_weight, seed_file, prefix)
 
+    # Run Leiden clustering
+    run_leiden_clustering(args, norm_embeddings, namelist, length_weight, seed_file, output_path)
 
-    embMat = embMat[np.array(length_weight) >= contig_len]
-    namelist = namelist[np.array(length_weight) >= contig_len]
-    length_weight = list(np.array(length_weight)[np.array(length_weight) >= contig_len])
+    logger.info('Clustering completed.')
 
-    if args.not_l2normaize:
-        norm_embeddings = embMat
-    else:
-        norm_embeddings = normalize(embMat)
+def load_embeddings(emb_file: Path) -> tuple:
+    embHeader = pd.read_csv(emb_file, sep='\t', nrows=1)
+    embMat = pd.read_csv(emb_file, sep='\t', usecols=range(1, embHeader.shape[1])).values
+    namelist = pd.read_csv(emb_file, sep='\t', usecols=[0]).values.flatten()
+    return embMat, namelist
 
-
-    # #### method1
-    os.makedirs(output_path, exist_ok=True)
-
+def run_weighted_seed_kmeans(args, contig_file, namelist, output_path, norm_embeddings, length_weight, seed_file, prefix):
     try:
-        seed_namelist = pd.read_csv(seed_file, header=None, sep='\t', usecols=range(1)).values[:, 0]
+        seed_namelist = pd.read_csv(seed_file, header=None, sep='\t', usecols=[0]).values.flatten()
         seed_num = len(np.unique(seed_namelist))
     except pd.errors.EmptyDataError:
         logger.warning("Seed file is empty. Exiting now.")
-
         sys.exit(0)
-        # seed_namelist = []
-        # seed_num = 0
 
-    mode = 'weight_seed_kmeans'
-    if prefix:
-        mode = mode + '_' + prefix
+    mode = f'weight_seed_kmeans{"_" + prefix if prefix else ""}'
     logger.info("Run weighted seed k-means for obtaining the SCG information of the contigs within a manageable time during the final step.")
+    
     bin_nums = [seed_num]
-
     if args.cluster_num:
         bin_nums.append(args.cluster_num)
 
-    logger.info("Bin_numbers:\t"+str(bin_nums))
+    logger.info(f"Bin_numbers:\t{bin_nums}")
     for k in bin_nums:
         logger.info(k)
         seed_kmeans_full(logger, contig_file, namelist, output_path, norm_embeddings, k, mode, length_weight, seed_file)
 
-    import multiprocessing
-
+def run_leiden_clustering(args, norm_embeddings, namelist, length_weight, seed_file, output_path):
     num_workers = args.num_threads
+    parameter_list = [1, 5, 10, 30, 50, 70, 90, 110]
+    bandwidth_list = [0.05, 0.1, 0.15, 0.2, 0.3]
+    partgraph_ratio_list = [50, 80, 100]
+    max_edges = 100
 
+    p = fit_hnsw_index(logger, norm_embeddings, num_workers, ef=max_edges * 10)
+    seed_bacar_marker_idx = gen_seed_idx(seed_file, contig_id_list=namelist)
+    initial_list = list(range(len(namelist)))
+    is_membership_fixed = [i in seed_bacar_marker_idx for i in initial_list]
 
-    ##### #########  hnswlib_method
-    parameter_list = [1, 5,10,30,50,70, 90, 110]
-    bandwidth_list = [0.05, 0.1,0.15, 0.2,0.3]
-    partgraph_ratio_list =[50,100,80]
-    max_edges_list = [100]
-    for max_edges in max_edges_list:
-        p = fit_hnsw_index(logger, norm_embeddings, num_workers, ef=max_edges * 10)
-        seed_bacar_marker_idx = gen_seed_idx(seed_file, contig_id_list=namelist)
-        initial_list = list(np.arange(len(namelist)))
-        is_membership_fixed = [i in seed_bacar_marker_idx for i in initial_list]
+    time_start = time.time()
+    ann_neighbor_indices, ann_distances = p.knn_query(norm_embeddings, max_edges + 1, num_threads=num_workers)
+    time_end = time.time()
+    logger.info(f'knn query time cost:\t{time_end - time_start}s')
 
-        time_start = time.time()
-        ann_neighbor_indices, ann_distances = p.knn_query(norm_embeddings, max_edges+1, num_threads=num_workers)
-        #ann_distances is l2 distance's square
-        time_end = time.time()
-        logger.info('knn query time cost:\t' +str(time_end - time_start) + "s")
+    total_tasks = sum(1 for _ in partgraph_ratio_list for _ in bandwidth_list for _ in parameter_list)
 
+    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+        futures = []
+        for partgraph_ratio in partgraph_ratio_list:
+            for bandwidth in bandwidth_list:
+                for para in parameter_list:
+                    output_file = output_path / f'Leiden_bandwidth_{bandwidth}_res_maxedges{max_edges}respara_{para}_partgraph_ratio_{partgraph_ratio}.tsv'
+                    if not output_file.exists():
+                        futures.append(executor.submit(
+                            run_leiden, str(output_file), namelist, ann_neighbor_indices, ann_distances, 
+                            length_weight, max_edges, norm_embeddings, bandwidth, 'l2', 
+                            initial_list, is_membership_fixed, para, partgraph_ratio
+                        ))
 
-        with multiprocessing.Pool(num_workers) as multiprocess:
-            for partgraph_ratio in partgraph_ratio_list:
-                for bandwidth in bandwidth_list:
-                    for para in parameter_list:
-                        output_file = output_path + 'Leiden_bandwidth_' + str(
-                            bandwidth) + '_res_maxedges' + str(max_edges) + 'respara_'+str(para)+'_partgraph_ratio_'+str(partgraph_ratio)+'.tsv'
+        with tqdm(total=total_tasks, desc="Leiden clustering") as pbar:
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                except Exception as e:
+                    logger.error(f"Error in Leiden clustering: {str(e)}")
+                pbar.update(1)
 
-                        if not (os.path.exists(output_file)):
-                            multiprocess.apply_async(run_leiden, (output_file, namelist, ann_neighbor_indices, ann_distances, length_weight, max_edges, norm_embeddings,
-                                                                        bandwidth, 'l2', initial_list,is_membership_fixed,
-                                                                        para, partgraph_ratio))
-
-            multiprocess.close()
-            multiprocess.join()
-        logger.info('multiprocess Done')
+    logger.info('Leiden clustering completed')
 
 
 
