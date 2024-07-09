@@ -100,7 +100,8 @@ def seed_kmeans_full(logger, contig_file: str, namelist: List[str], out_path: st
 
     This function performs weighted seed-based k-means clustering on the input data using specified parameters and saves the results.
     """
-    out_path = out_path + prefix
+    # outpath is a Path object and prefix is a string
+    out_path = str(out_path) + prefix
     seed_bacar_marker_idx = gen_seed_idx(seed_bacar_marker_url, contig_id_list=namelist)
     time_start = time.time()
     # run seed-kmeans; length weight
@@ -242,25 +243,6 @@ def run_leiden(output_file: str, namelist: List[str],
                bandwidth: float = 0.1, lmode: str = 'l2', initial_list: Optional[List[Union[int, None]]] = None,
                is_membership_fixed: Optional[List[bool]] = None, resolution_parameter: float = 1.0,
                partgraph_ratio: int = 50) -> None:
-    """
-    Run Leiden community detection algorithm and save the results.
-
-    :param output_file: The path to the output file.
-    :param namelist: A list of contig names.
-    :param ann_neighbor_indices: Array of ANN neighbor indices.
-    :param ann_distances: Array of ANN distances.
-    :param length_weight: List of length weights.
-    :param max_edges: Maximum number of edges.
-    :param norm_embeddings: Array of normalized embeddings.
-    :param bandwidth: Bandwidth parameter (default: 0.1).
-    :param lmode: Distance mode ('l1' or 'l2', default: 'l2').
-    :param initial_list: Initial membership list (default: None).
-    :param is_membership_fixed: Whether membership is fixed (default: None).
-    :param resolution_parameter: Resolution parameter (default: 1.0).
-    :param partgraph_ratio: Partition graph ratio (default: 50).
-
-    :return: None
-    """
     try:
         # Input validation
         if lmode not in ['l1', 'l2']:
@@ -302,17 +284,18 @@ def run_leiden(output_file: str, namelist: List[str],
         # Run Leiden algorithm
         partition = leidenalg.find_partition(
             g,
-            leidenalg.RBConfigurationVertexPartition,
+            leidenalg.RBERVertexPartition,
             weights='weight',
+            node_sizes=length_weight,
             initial_membership=initial_list,
             resolution_parameter=resolution_parameter,
-            node_sizes=length_weight,
-            seed=42  # for reproducibility
+            n_iterations=-1
         )
 
-        # Optimize partition
-        optimiser = leidenalg.Optimiser()
-        optimiser.optimise_partition(partition, is_membership_fixed=is_membership_fixed, n_iterations=-1)
+        # If is_membership_fixed is provided, optimize the partition
+        if is_membership_fixed is not None:
+            optimiser = leidenalg.Optimiser()
+            optimiser.optimise_partition(partition, is_membership_fixed=is_membership_fixed, n_iterations=-1)
 
         # Prepare results
         contig_labels_dict = {name: f'group{community}' for name, community in zip(namelist, partition.membership)}
@@ -333,7 +316,7 @@ def run_leiden(output_file: str, namelist: List[str],
 
     return None
 
-def cluster(args, prefix: Optional[str] = None) -> None:
+def cluster(logger, args, prefix: Optional[str] = None) -> None:
     """
     Cluster contigs and save the results.
 
@@ -423,7 +406,12 @@ def run_leiden_clustering(args, norm_embeddings, namelist, length_weight, seed_f
 
     total_tasks = sum(1 for _ in partgraph_ratio_list for _ in bandwidth_list for _ in parameter_list)
 
-    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+    # Limit Leidne worker count to not go OOM or get into IO bottleneck
+    leiden_workers = int(max(1, num_workers // 1.5))
+
+    logger.info(f'Start Leiden clustering with {leiden_workers} workers to process {total_tasks} tasks.')
+
+    with ProcessPoolExecutor(max_workers=leiden_workers) as executor:
         futures = []
         for partgraph_ratio in partgraph_ratio_list:
             for bandwidth in bandwidth_list:
@@ -445,6 +433,3 @@ def run_leiden_clustering(args, norm_embeddings, namelist, length_weight, seed_f
                 pbar.update(1)
 
     logger.info('Leiden clustering completed')
-
-
-
