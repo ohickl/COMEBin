@@ -193,9 +193,7 @@ def get_kmerMetric_emb(kmer_model_path,compositMats,device=torch.device('cpu'),k
 
 def file_len(fname):
     with open(fname) as f:
-        for i, l in enumerate(f):
-            pass
-    return i + 1
+        return sum(1 for _ in f)
 
 def gen_seed(logger, contig_file: str, threads: int, contig_length_threshold: int,
              marker_name: str = "marker", quarter: str = "3quarter"):
