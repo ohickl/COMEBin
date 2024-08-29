@@ -53,12 +53,19 @@ seed_file=${contig_file}.bacar_marker.2quarter_lencutoff_1001.seed
 python main.py bin --contig_file ${contig_file} \
 --emb_file ${emb_file} \
 --output_path ${output_dir}/comebin_res \
---seed_file ${seed_file} --num_threads ${num_threads}
 
-if [[ $? -ne 0 ]] ; then echo "Something went wrong with running clustering. Exiting."; exit 1; fi
+exit_code=$?
+
+if [ $exit_code -eq 66 ]; then
+    echo "Comebin couldn't find any bins. Exiting normally."
+    exit 0
+elif [ $exit_code -ne 0 ]; then
+    echo "Something went wrong with running clustering. Exiting."
+    exit 1
+fi
 
 python main.py get_result --contig_file ${contig_file} \
 --output_path ${output_dir}/comebin_res \
 --seed_file ${seed_file} --num_threads ${num_threads}
 
-if [[ $? -ne 0 ]] ; then echo "Something went wrong with running clustering. Exiting."; exit 1; fi
+if [[ $? -ne 0 ]] ; then echo "Something went wrong with getting the results. Exiting."; exit 1; fi
