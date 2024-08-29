@@ -373,7 +373,13 @@ def run_weighted_seed_kmeans(args, contig_file, namelist, output_path, norm_embe
         seed_num = len(np.unique(seed_namelist))
     except pd.errors.EmptyDataError:
         logger.warning("Seed file is empty. Exiting now.")
-        sys.exit(0)
+        DB_EMPTY_ERROR = 66
+
+        # Touch empty `comebin_res_bins` dir and exit (output_path is .../comebin_res/cluster_res)
+        bin_dir = output_path.parent / 'comebin_res_bins'
+        bin_dir.mkdir(parents=True, exist_ok=True) 
+
+        sys.exit(DB_EMPTY_ERROR)
 
     mode = f'weight_seed_kmeans{"_" + prefix if prefix else ""}'
     logger.info("Run weighted seed k-means for obtaining the SCG information of the contigs within a manageable time during the final step.")
