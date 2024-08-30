@@ -53,6 +53,7 @@ seed_file=${contig_file}.bacar_marker.2quarter_lencutoff_1001.seed
 python main.py bin --contig_file ${contig_file} \
 --emb_file ${emb_file} \
 --output_path ${output_dir}/comebin_res \
+--seed_file ${seed_file} --num_threads ${num_threads}
 
 exit_code=$?
 
