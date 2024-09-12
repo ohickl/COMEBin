@@ -100,21 +100,21 @@ def seed_kmeans_full(logger, contig_file: str, namelist: List[str], out_path: st
 
     This function performs weighted seed-based k-means clustering on the input data using specified parameters and saves the results.
     """
-    # outpath is a Path object and prefix is a string
-    out_path = str(out_path) + prefix
+    out_path = f'{str(out_path)}/{prefix}'
     seed_bacar_marker_idx = gen_seed_idx(seed_bacar_marker_url, contig_id_list=namelist)
     time_start = time.time()
     # run seed-kmeans; length weight
-    output_temp = out_path + '_k_' + str(
-        bin_number) + '_result.tsv'
+    output_temp = f'{out_path}_k_{bin_number}_result.tsv'
+    
     if not (os.path.exists(output_temp)):
         km = KMeans(n_clusters=bin_number, n_jobs=-1, random_state=7, algorithm="full",
                     init=functools.partial(partial_seed_init, seed_idx=seed_bacar_marker_idx))
         km.fit(X_mat, sample_weight=length_weight)
         idx = km.labels_
         save_result(idx, output_temp, namelist)
-
-        gen_bins_from_tsv(contig_file, output_temp, output_temp+'_bins')
+      
+        # Needs fasta as str not Path
+        gen_bins_from_tsv(str(contig_file), output_temp, f'{output_temp}_bins')
 
         time_end = time.time()
         logger.info("Running weighted seed-kmeans cost:\t"+str(time_end - time_start) + 's.')
